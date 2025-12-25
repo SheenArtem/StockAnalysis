@@ -4,7 +4,7 @@ import pandas as pd
 import io
 import zipfile
 from datetime import datetime
-
+from FinMind.data import DataLoader
 # 設定網頁標題
 st.set_page_config(page_title="大量股票數據批次下載器", page_icon="📦")
 st.title('📦 台股/美股 批次資料下載器')
@@ -26,46 +26,106 @@ with col2:
 
 # 按鈕觸發
 if st.button('🚀 開始批次抓取並打包'):
-    # 處理輸入字串：取代逗號、換行，分割成清單
     tickers = [t.strip().upper() for t in raw_tickers.replace('\n', ',').split(',') if t.strip()]
     
     if not tickers:
         st.warning("請至少輸入一檔股票代號。")
     else:
-        # 建立一個記憶體中的 ZIP 檔
         zip_buffer = io.BytesIO()
-        
         progress_bar = st.progress(0)
         status_text = st.empty()
         success_count = 0
         
+        # 初始化 FinMind Loader
+        fm = DataLoader()
+        
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
             for i, ticker_symbol in enumerate(tickers):
-                # 更新進度條
                 status_text.text(f"正在下載 ({i+1}/{len(tickers)}): {ticker_symbol} ...")
                 progress_bar.progress((i + 1) / len(tickers))
                 
-                # 自動補全台股代號
+                # 處理代號
                 real_ticker = ticker_symbol
+                stock_id_only = ticker_symbol # 用於 FinMind (只要數字)
+                
                 if ticker_symbol.isdigit():
                     real_ticker = f"{ticker_symbol}.TW"
-                
+                    stock_id_only = ticker_symbol
+                else:
+                    # 美股無法抓 FinMind 籌碼，僅台股適用
+                    pass
+
                 try:
-                    # 下載數據
+                    # 1. 下載股價 (YFinance)
                     df = yf.download(real_ticker, period=period, interval="1d", progress=False)
                     
                     if not df.empty:
-                        # 清洗數據
+                        # 清洗 YF 格式
                         if isinstance(df.columns, pd.MultiIndex):
                             df.columns = df.columns.get_level_values(0)
                         df.reset_index(inplace=True)
-                        
-                        # 轉成 CSV 字串
+                        # 確保 Date 是 datetime 格式且不含時區 (以便合併)
+                        df['Date'] = pd.to_datetime(df['Date']).dt.tz_localize(None)
+
+                        # 2. 下載籌碼 (FinMind) - 僅限台股數字代號
+                        if ticker_symbol.isdigit():
+                            try:
+                                # 設定起始日期 (配合 YF 的 period，這裡簡單抓 5 年以免不夠)
+                                start_date = (datetime.now() - pd.DateOffset(years=5)).strftime('%Y-%m-%d')
+                                
+                                # A. 下載三大法人
+                                df_inst = fm.taiwan_stock_institutional_investors(
+                                    stock_id=stock_id_only, start_date=start_date
+                                )
+                                if not df_inst.empty:
+                                    # 整理欄位：將 date 轉為 datetime，並 pivot 轉成寬表格
+                                    df_inst['date'] = pd.to_datetime(df_inst['date'])
+                                    # 加總三大法人買賣超 (Foreign_Investor, Investment_Trust, Dealer)
+                                    # 這裡簡化：直接保留原始格式或 pivot
+                                    # 為了方便，我們計算「三大法人合計」與「外資」、「投信」
+                                    df_inst_pivot = df_inst.pivot_table(
+                                        index='date', 
+                                        columns='name', 
+                                        values=['buy', 'sell'], 
+                                        aggfunc='sum'
+                                    ).fillna(0)
+                                    
+                                    # 算出淨買賣超 (Buy - Sell)
+                                    df_net = pd.DataFrame()
+                                    df_net['Foreign_Net'] = df_inst_pivot['buy']['Foreign_Investor'] - df_inst_pivot['sell']['Foreign_Investor']
+                                    df_net['Trust_Net'] = df_inst_pivot['buy']['Investment_Trust'] - df_inst_pivot['sell']['Investment_Trust']
+                                    df_net['Dealer_Net'] = df_inst_pivot['buy']['Dealer_Self_Analysis'] - df_inst_pivot['sell']['Dealer_Self_Analysis'] # 自營商(自行買賣)
+                                    
+                                    # 合併進主資料
+                                    df = pd.merge(df, df_net, left_on='Date', right_index=True, how='left')
+
+                                # B. 下載融資融券
+                                df_margin = fm.taiwan_stock_margin_purchase_short_sale(
+                                    stock_id=stock_id_only, start_date=start_date
+                                )
+                                if not df_margin.empty:
+                                    df_margin['date'] = pd.to_datetime(df_margin['date'])
+                                    df_margin.set_index('date', inplace=True)
+                                    
+                                    # 只取需要的欄位：融資餘額 (MarginPurchaseTodayBalance)
+                                    margin_cols = df_margin[['MarginPurchaseTodayBalance', 'ShortSaleTodayBalance']]
+                                    margin_cols.columns = ['Margin_Balance', 'Short_Balance'] # 改名
+                                    
+                                    # 合併
+                                    df = pd.merge(df, margin_cols, left_on='Date', right_index=True, how='left')
+                                    
+                            except Exception as e:
+                                print(f"FinMind 數據抓取部分失敗: {e}")
+                                # 失敗不影響主流程，繼續存股價
+                                pass
+
+                        # 3. 轉成 CSV 並寫入 ZIP
+                        # 填補 NaN (因為籌碼資料可能有缺漏日期)
+                        df.fillna(0, inplace=True)
                         csv_data = df.to_csv(index=False).encode('utf-8-sig')
-                        
-                        # 寫入 ZIP 檔 (檔名: 2330.TW.csv)
                         zf.writestr(f"{real_ticker}.csv", csv_data)
                         success_count += 1
+                        
                     else:
                         st.error(f"❌ {real_ticker} 查無資料")
                         
