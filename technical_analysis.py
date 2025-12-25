@@ -256,3 +256,47 @@ def plot_dual_timeframe(ticker_symbol):
 if __name__ == "__main__":
     # 測試用
     plot_dual_timeframe('2330')
+
+
+# ==========================================
+# 新增模組：ZIP 批次處理器 (Batch Processor)
+# ==========================================
+import zipfile
+import os
+
+def analyze_zip_batch(zip_path):
+    """
+    功能：解壓縮 ZIP 檔，並列出裡面有哪些股票 CSV
+    注意：Gemini 雖然可以解壓縮，但一次畫太多圖會當機。
+    策略：先列出清單，讓使用者選擇要分析哪一檔。
+    """
+    print(f"📦 收到壓縮檔，正在解壓縮...")
+    
+    extracted_files = []
+    extract_path = "/mnt/data/extracted_stocks" # Gemini 沙盒常用路徑
+    
+    try:
+        # 建立解壓目錄
+        if not os.path.exists(extract_path):
+            os.makedirs(extract_path)
+            
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_path)
+            extracted_files = [f for f in zip_ref.namelist() if f.endswith('.csv')]
+            
+        print(f"✅ 解壓縮成功！共發現 {len(extracted_files)} 檔股票數據。")
+        print("請告訴我您想優先分析哪一檔？(輸入代號即可)")
+        
+        # 回傳檔案對應字典 {'2330': 'path/to/2330.TW.csv'}
+        file_map = {}
+        for f in extracted_files:
+            # 假設檔名是 2330.TW.csv，提取 2330
+            stock_id = f.split('.')[0] 
+            full_path = os.path.join(extract_path, f)
+            file_map[stock_id] = full_path
+            
+        return file_map
+
+    except Exception as e:
+        print(f"❌ 解壓縮失敗: {e}")
+        return {}
