@@ -7,11 +7,15 @@ from datetime import datetime
 from FinMind.data import DataLoader
 
 # 設定網頁標題
-st.set_page_config(page_title="大量股票數據批次下載器", page_icon="📦")
-st.title('📦 台股/美股 批次資料下載器')
-st.markdown("### 適合大量分析：一次輸入多檔代號，下載 ZIP 包，直接丟給 Gemini。")
+st.set_page_config(page_title="全方位股票籌碼下載器", page_icon="📦")
+st.title('📦 台股/美股 籌碼與數據下載器')
+st.markdown("### 批次分析：一次輸入多檔代號，下載包含「法人、資券、大戶」的 CSV。")
 
-# 1. 輸入區塊
+# ==========================================
+#  區塊 1: 股票批次下載 (原有功能 - 日線+籌碼)
+# ==========================================
+st.subheader("1. 股票批次下載 (日線 + 籌碼)")
+
 col1, col2 = st.columns([3, 1])
 with col1:
     # 支援換行或逗號分隔
@@ -26,7 +30,7 @@ with col2:
     st.caption("自動補全 .TW")
 
 # 按鈕觸發
-if st.button('🚀 開始批次抓取並打包'):
+if st.button('🚀 開始批次抓取並打包 (Stocks)'):
     tickers = [t.strip().upper() for t in raw_tickers.replace('\n', ',').split(',') if t.strip()]
     
     if not tickers:
@@ -42,7 +46,8 @@ if st.button('🚀 開始批次抓取並打包'):
         
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
             for i, ticker_symbol in enumerate(tickers):
-                # ... (進度條 code 不變)
+                status_text.text(f"正在下載 ({i+1}/{len(tickers)}): {ticker_symbol} ...")
+                progress_bar.progress((i + 1) / len(tickers))
                 
                 # 判斷是否為台股 (全數字為台股)
                 is_tw_stock = ticker_symbol.isdigit()
@@ -62,13 +67,10 @@ if st.button('🚀 開始批次抓取並打包'):
                         if isinstance(df.columns, pd.MultiIndex):
                             df.columns = df.columns.get_level_values(0)
                         df.reset_index(inplace=True)
-                        df['Date'] = pd.to_datetime(df['Date']).dt.tz_localize(None)
+                        if 'Date' in df.columns:
+                            df['Date'] = pd.to_datetime(df['Date']).dt.tz_localize(None)
 
-                        # ==========================================
-                        #  🛡️ 安全初始化：先建立空欄位 (防呆關鍵)
-                        # ==========================================
-                        # 無論台美股，先預設這些籌碼欄位為 0
-                        # 這樣後面的公式運算就不會因為找不到欄位而當機
+                        # 🛡️ 安全初始化：先建立空欄位 (防呆)
                         chip_cols = [
                             'Foreign_Net', 'Trust_Net', 'Dealer_Net', # 三大法人
                             'Margin_Balance', 'Short_Balance',        # 融資券
@@ -78,12 +80,9 @@ if st.button('🚀 開始批次抓取並打包'):
                         for c in chip_cols:
                             df[c] = 0.0
 
-                        # ==========================================
-                        #  🇹🇼 台股專屬：抓取 FinMind 籌碼
-                        # ==========================================
+                        # 🇹🇼 台股專屬：抓取 FinMind 籌碼
                         if is_tw_stock:
                             try:
-                                # 設定 FinMind 起始日
                                 start_date = (datetime.now() - pd.DateOffset(years=5)).strftime('%Y-%m-%d')
                                 
                                 # A. 三大法人
@@ -92,21 +91,16 @@ if st.button('🚀 開始批次抓取並打包'):
                                     df_inst['date'] = pd.to_datetime(df_inst['date'])
                                     pivot = df_inst.pivot_table(index='date', columns='name', values=['buy', 'sell'], aggfunc='sum').fillna(0)
                                     
-                                    # 寫入 DataFrame (使用 update 或 merge)
-                                    # 這裡為了簡單，先算出暫存 Series 再映射
-                                    # 注意：需處理可能的 Key Error (若某法人當天沒交易)
                                     def get_net(name):
                                         if name in pivot['buy'] and name in pivot['sell']:
                                             return pivot['buy'][name] - pivot['sell'][name]
                                         return 0
                                     
-                                    # 建立暫存 DF 來合併，避免 Index 問題
                                     temp_df = pd.DataFrame(index=pivot.index)
                                     temp_df['Foreign_Net'] = get_net('Foreign_Investor')
                                     temp_df['Trust_Net'] = get_net('Investment_Trust')
-                                    temp_df['Dealer_Net'] = get_net('Dealer_Self_Analysis') # 自營商(自行)
+                                    temp_df['Dealer_Net'] = get_net('Dealer_Self_Analysis')
                                     
-                                    # 合併進主表 (update 僅更新有值的)
                                     df.set_index('Date', inplace=True)
                                     df.update(temp_df)
                                     df.reset_index(inplace=True)
@@ -122,14 +116,13 @@ if st.button('🚀 開始批次抓取並打包'):
                                     df.update(df_margin[['Margin_Balance', 'Short_Balance']])
                                     df.reset_index(inplace=True)
 
-                                # C. 集保股權分散 (週資料)
+                                # C. 集保股權分散
                                 df_holding = fm.taiwan_stock_holding_shares_per(stock_id=stock_id_only, start_date=start_date)
                                 if not df_holding.empty:
                                     df_holding['date'] = pd.to_datetime(df_holding['date'])
                                     df_holding['percent'] = pd.to_numeric(df_holding['percent'], errors='coerce')
                                     df_holding['HoldingSharesLevel'] = pd.to_numeric(df_holding['HoldingSharesLevel'], errors='coerce')
                                     
-                                    # 大戶 (>400張, Level>=12) vs 散戶 (<5張, Level<=3)
                                     grp = df_holding.groupby('date')
                                     big = grp.apply(lambda x: x[x['HoldingSharesLevel'] >= 12]['percent'].sum())
                                     small = grp.apply(lambda x: x[x['HoldingSharesLevel'] <= 3]['percent'].sum())
@@ -137,48 +130,30 @@ if st.button('🚀 開始批次抓取並打包'):
                                     temp_hold = pd.DataFrame({'Big_Hands_Pct': big, 'Small_Hands_Pct': small})
                                     temp_hold['Chip_Spread'] = temp_hold['Big_Hands_Pct'] - temp_hold['Small_Hands_Pct']
                                     
-                                    # 合併並填補 (週 -> 日)
                                     df.set_index('Date', inplace=True)
-                                    # 先 merge 會有空值，再 ffill
                                     df = pd.merge(df, temp_hold, left_index=True, right_index=True, how='left', suffixes=('', '_new'))
-                                    # 更新欄位
                                     for col in ['Big_Hands_Pct', 'Small_Hands_Pct', 'Chip_Spread']:
                                         if f'{col}_new' in df.columns:
-                                            df[col] = df[f'{col}_new'].combine_first(df[col]) # 優先用新資料
+                                            df[col] = df[f'{col}_new'].combine_first(df[col])
                                             df.drop(columns=[f'{col}_new'], inplace=True)
-                                    
                                     df.reset_index(inplace=True)
-                                    # 針對集保數據做 ffill (讓週五數據延續到下週四)
                                     df[['Big_Hands_Pct', 'Small_Hands_Pct', 'Chip_Spread']] = df[['Big_Hands_Pct', 'Small_Hands_Pct', 'Chip_Spread']].ffill()
 
                             except Exception as e:
-                                print(f"FinMind 錯誤 (不影響主流程): {e}")
-                                # 出錯了也沒關係，因為我們最上面已經「安全初始化」為 0 了
+                                print(f"FinMind Warning: {e}")
                                 pass
 
-                        # ==========================================
-                        #  🧮 通用計算：主力指標 & EFI (台美股皆可算)
-                        # ==========================================
-                        
-                        # 1. 確保 Volume 是數值
+                        # 🧮 通用指標
                         df['Volume'] = pd.to_numeric(df['Volume'], errors='coerce').fillna(0)
-                        
-                        # 2. 計算主力總買賣超 (美股這邊會是 0+0+0=0，不會報錯)
                         df['Main_Force_Net'] = df['Foreign_Net'] + df['Trust_Net'] + df['Dealer_Net']
-
-                        # 3. 計算 5日/20日 集中度
-                        # 分母加 1e-9 避免除以零
                         df['Concentration_5'] = (df['Main_Force_Net'].rolling(5).sum() / (df['Volume'].rolling(5).sum() + 1e-9) * 100).round(2)
                         df['Concentration_20'] = (df['Main_Force_Net'].rolling(20).sum() / (df['Volume'].rolling(20).sum() + 1e-9) * 100).round(2)
-
-                        # 4. 埃爾德強力指標 (EFI) - 美股也可以用！
+                        
                         close_diff = df['Close'].diff()
                         df['Raw_Force'] = close_diff * df['Volume']
                         df['EFI_13'] = df['Raw_Force'].ewm(span=13, adjust=False).mean()
 
-                        # ==========================================
-                        #  💾 存檔
-                        # ==========================================
+                        # 存檔
                         df.fillna(0, inplace=True)
                         csv_data = df.to_csv(index=False).encode('utf-8-sig')
                         zf.writestr(f"{real_ticker}.csv", csv_data)
@@ -189,15 +164,11 @@ if st.button('🚀 開始批次抓取並打包'):
                 except Exception as e:
                     st.error(f"❌ {real_ticker} 下載失敗: {e}")
 
-        # 下載完成
         progress_bar.progress(100)
         status_text.text(f"處理完成！成功打包 {success_count} 檔股票。")
         
         if success_count > 0:
-            # 讓 ZIP 指標回到開頭
             zip_buffer.seek(0)
-            
-            # 下載按鈕
             filename = f"Stock_Batch_{datetime.now().strftime('%Y%m%d_%H%M')}.zip"
             st.download_button(
                 label=f"📥 下載 ZIP 壓縮檔 ({success_count} 檔)",
@@ -205,3 +176,44 @@ if st.button('🚀 開始批次抓取並打包'):
                 file_name=filename,
                 mime="application/zip"
             )
+
+# ==========================================
+#  區塊 2: 台指期專屬下載 (新增功能)
+# ==========================================
+st.markdown("---")
+st.subheader("2. ⏱️ 台指期 (WTX) 小時 K 下載")
+st.info("💡 下載近 730 天 (約2年) 的連續月台指期貨資料，週期為 1 小時 (1h)。適合上傳進行「日線+小時線」雙週期分析。")
+
+if st.button("🚀 下載台指期 (WTX=F) 小時 K"):
+    
+    ticker_futures = "WTX=F" # Yahoo Finance 台指期連續月代號
+    
+    with st.spinner(f'正在下載 {ticker_futures} 小時線資料...'):
+        try:
+            # 強制設定：1小時, 2年 (Yahoo API 限制)
+            df_futures = yf.download(ticker_futures, period="2y", interval="1h", progress=False)
+            
+            if not df_futures.empty:
+                # 數據清洗
+                if isinstance(df_futures.columns, pd.MultiIndex):
+                    df_futures.columns = df_futures.columns.get_level_values(0)
+                df_futures.reset_index(inplace=True)
+                
+                # 轉換為 CSV
+                csv_futures = df_futures.to_csv(index=False).encode('utf-8-sig')
+                
+                st.success(f"✅ 下載成功！資料區間：{df_futures['Datetime'].min()} 至 {df_futures['Datetime'].max()}")
+                
+                # 獨立下載按鈕
+                filename_futures = f"WTX_Hourly_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+                st.download_button(
+                    label="📥 點擊下載 WTX_Hourly.csv",
+                    data=csv_futures,
+                    file_name=filename_futures,
+                    mime="text/csv"
+                )
+            else:
+                st.error("❌ 下載失敗，Yahoo Finance 暫無數據 (可能是連線問題)。")
+                
+        except Exception as e:
+            st.error(f"❌ 發生錯誤: {e}")
