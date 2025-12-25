@@ -75,7 +75,101 @@ def calculate_all_indicators(df):
     df['ADX'] = df['DX'].rolling(window=14).mean()
 
     return df
+# ==========================================
+# 新增模組：數據載入與重採樣 (Data Loader & Resampler)
+# ==========================================
 
+def load_and_resample(source):
+    """
+    智慧數據載入器：
+    1. 若輸入是字串 (Ticker) -> 用 yfinance 下載
+    2. 若輸入是 DataFrame (CSV) -> 直接使用並自動產生週線
+    """
+    df_day = pd.DataFrame()
+    df_week = pd.DataFrame()
+    ticker_name = "Unknown"
+
+    # 情境 A: 傳入的是股票代號 (字串)
+    if isinstance(source, str):
+        ticker_name = source
+        if source.isdigit(): ticker_name = f"{source}.TW"
+        
+        print(f"📥 正在下載 {ticker_name} 網路數據...")
+        # 下載日線
+        df_day = yf.download(ticker_name, period='1y', interval='1d', progress=False)
+        # 下載週線
+        df_week = yf.download(ticker_name, period='3y', interval='1wk', progress=False)
+
+    # 情境 B: 傳入的是 CSV 資料 (DataFrame)
+    elif isinstance(source, pd.DataFrame):
+        print(f"📂 正在處理上傳的 CSV 數據...")
+        ticker_name = "Uploaded_Data"
+        df_day = source.copy()
+        
+        # 確保 Index 是 Datetime
+        if not isinstance(df_day.index, pd.DatetimeIndex):
+            # 嘗試尋找日期欄位
+            for col in df_day.columns:
+                if 'date' in col.lower() or '時間' in col:
+                    df_day[col] = pd.to_datetime(df_day[col])
+                    df_day.set_index(col, inplace=True)
+                    break
+        
+        # 確保欄位名稱標準化 (Open, High, Low, Close, Volume)
+        # 這裡做簡單映射，視您的 CSV 格式而定
+        df_day.columns = [c.capitalize() for c in df_day.columns] 
+
+        # 自動生成週線 (Resample) - 這是關鍵！
+        # 將日線 CSV 轉換為週線，規則：週五收盤、週一開盤、最高、最低、總量
+        logic = {
+            'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
+        }
+        # 過濾只保留存在的欄位
+        agg_logic = {k: v for k, v in logic.items() if k in df_day.columns}
+        
+        if not df_day.empty:
+            df_week = df_day.resample('W-FRI').agg(agg_logic)
+
+    # 處理 MultiIndex (共用清洗邏輯)
+    for df in [df_day, df_week]:
+        if not df.empty and isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
+    return ticker_name, df_day, df_week
+
+# ==========================================
+# 修改後的主程式：支援 CSV 與 Ticker
+# ==========================================
+
+def plot_dual_timeframe(source):
+    """
+    主程式：接受 '代號' 或 'DataFrame' 進行雙週期分析
+    """
+    # 1. 呼叫智慧載入器
+    ticker, df_day, df_week = load_and_resample(source)
+
+    print(f"🚀 啟動雙週期全方位分析引擎: {ticker}")
+
+    # 2. 繪製週線
+    if not df_week.empty:
+        try:
+            df_week = calculate_all_indicators(df_week)
+            plot_single_chart(ticker, df_week, "Trend (Long)", "Weekly")
+        except Exception as e:
+            print(f"❌ 週線計算錯誤: {e}")
+    else:
+        print("❌ 無法取得週線數據 (可能是 CSV 資料不足)")
+
+    # 3. 繪製日線
+    if not df_day.empty:
+        try:
+            df_day = calculate_all_indicators(df_day)
+            plot_single_chart(ticker, df_day, "Action (Short)", "Daily")
+        except Exception as e:
+            print(f"❌ 日線計算錯誤: {e}")
+    else:
+        print("❌ 無法取得日線數據")
+        
 def plot_single_chart(ticker, df, title_suffix, timeframe_label):
     """繪製單張圖表 (包含 5 個面板)"""
     
