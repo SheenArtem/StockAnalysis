@@ -20,7 +20,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     # 支援換行或逗號分隔
     raw_tickers = st.text_area(
-        "輸入股票代號 (用逗號或換行分隔)", 
+        "輸入股票代號 (用逗號或換行分隔，台灣櫃買股票請自行補上.TWO)", 
         value="2330, 2317, 2454, NVDA, TSLA", 
         height=150
     )
