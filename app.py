@@ -21,7 +21,7 @@ with col1:
         height=150
     )
 with col2:
-    period = st.selectbox("時間長度", ["1y", "3y", "5y", "10y"], index=1)
+    period = st.selectbox("時間長度", ["1y", "3y", "5y", "10y"], index=0)
     st.markdown("---")
     st.caption("自動補全 .TW")
 
