@@ -187,7 +187,7 @@ if st.button('🚀 開始批次抓取並打包'):
                     else:
                         st.error(f"❌ {real_ticker} 查無資料")
                 except Exception as e:
-                    st.error(f"❌ {real_ticker} 下載失敗: {e}"
+                    st.error(f"❌ {real_ticker} 下載失敗: {e}")
 
         # 下載完成
         progress_bar.progress(100)
