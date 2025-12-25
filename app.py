@@ -189,19 +189,19 @@ if st.button('🚀 開始批次抓取並打包'):
                 except Exception as e:
                     st.error(f"❌ {real_ticker} 下載失敗: {e}")
 
-            # 下載完成
-            progress_bar.progress(100)
-            status_text.text(f"處理完成！成功打包 {success_count} 檔股票。")
+        # 下載完成
+        progress_bar.progress(100)
+        status_text.text(f"處理完成！成功打包 {success_count} 檔股票。")
+        
+        if success_count > 0:
+            # 讓 ZIP 指標回到開頭
+            zip_buffer.seek(0)
             
-            if success_count > 0:
-                # 讓 ZIP 指標回到開頭
-                zip_buffer.seek(0)
-                
-                # 下載按鈕
-                filename = f"Stock_Batch_{datetime.now().strftime('%Y%m%d_%H%M')}.zip"
-                st.download_button(
-                    label=f"📥 下載 ZIP 壓縮檔 ({success_count} 檔)",
-                    data=zip_buffer,
-                    file_name=filename,
-                    mime="application/zip"
+            # 下載按鈕
+            filename = f"Stock_Batch_{datetime.now().strftime('%Y%m%d_%H%M')}.zip"
+            st.download_button(
+                label=f"📥 下載 ZIP 壓縮檔 ({success_count} 檔)",
+                data=zip_buffer,
+                file_name=filename,
+                mime="application/zip"
                 )
