@@ -113,7 +113,40 @@ if st.button('🚀 開始批次抓取並打包'):
                                     
                                     # 合併
                                     df = pd.merge(df, margin_cols, left_on='Date', right_index=True, how='left')
+                                # C. 下載【集保大戶籌碼集中度】(每週更新)
+                                try:
+                                    # 抓取股權分散表
+                                    df_holding = fm.taiwan_stock_holding_shares_per(
+                                        stock_id=stock_id_only, 
+                                        start_date=start_date
+                                    )
                                     
+                                    if not df_holding.empty:
+                                        df_holding['date'] = pd.to_datetime(df_holding['date'])
+                                        
+                                        # 轉換欄位格式，確保可以運算
+                                        df_holding['percent'] = pd.to_numeric(df_holding['percent'], errors='coerce')
+                                        df_holding['HoldingSharesLevel'] = pd.to_numeric(df_holding['HoldingSharesLevel'], errors='coerce')
+                                
+                                        # 邏輯：計算持有 > 400 張的大戶總比例
+                                        # 集保分級中，第 12 級以上通常代表 > 400 張 (依官方定義可能略有變動，但通常取 12-17 級或 14-17 級)
+                                        # 這裡示範加總 "12級~17級" (約 400張以上) 的持有比例
+                                        # 若要抓 1000 張以上，就改成 >= 14
+                                        big_hands = df_holding[df_holding['HoldingSharesLevel'] >= 12].groupby('date')['percent'].sum()
+                                        
+                                        # 整理成 DataFrame
+                                        df_big_hands = pd.DataFrame(big_hands).rename(columns={'percent': 'Big_Hand_Hold_Pct'})
+                                        
+                                        # 合併進主資料
+                                        # 注意：集保是「週資料」，日資料是「日資料」
+                                        # 我們用 "how='left'" 並在合併後做 "前值填充 (ffill)"
+                                        # 這樣週一到週四就會自動帶入上週五的大戶數據，方便畫圖
+                                        df = pd.merge(df, df_big_hands, left_on='Date', right_index=True, how='left')
+                                        df['Big_Hand_Hold_Pct'] = df['Big_Hand_Hold_Pct'].ffill()
+                                
+                                except Exception as e:
+                                    print(f"集保數據抓取失敗: {e}")
+                                    pass    
                             except Exception as e:
                                 print(f"FinMind 數據抓取部分失敗: {e}")
                                 # 失敗不影響主流程，繼續存股價
